@@ -1,11 +1,12 @@
 import React, { useState } from 'react';
 import {
   View, Text, StyleSheet, TextInput, TouchableOpacity,
-  SafeAreaView, StatusBar, ScrollView, ActivityIndicator, Alert,
+  StatusBar, ScrollView, ActivityIndicator, Alert, KeyboardAvoidingView, Platform
 } from 'react-native';
-import Ionicons from '@expo/vector-icons/Ionicons';
-import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import { Heartbeat, User, EnvelopeSimple, LockKey, ShieldCheck, Stethoscope, CaretRight, Info, CheckCircle } from 'phosphor-react-native';
 import { registerUser, loginUser } from '../services/supabaseService';
+import { COLORS } from '../components/ui';
 
 // ─── Selector de rol ──────────────────────────────────────────────────────────
 const RoleSelector = ({ selected, onChange }) => (
@@ -14,14 +15,14 @@ const RoleSelector = ({ selected, onChange }) => (
       style={[styles.roleCard, selected === 'adulto_mayor' && styles.roleCardActive]}
       onPress={() => onChange('adulto_mayor')}
     >
-      <MaterialCommunityIcons name="account-heart" size={38} color={selected === 'adulto_mayor' ? '#2563eb' : '#94a3b8'} />
+      <Heartbeat size={32} color={selected === 'adulto_mayor' ? COLORS.primary : COLORS.textMuted} weight={selected === 'adulto_mayor' ? "fill" : "regular"} />
       <Text style={[styles.roleTitle, selected === 'adulto_mayor' && styles.roleTitleActive]}>
         Adulto Mayor
       </Text>
-      <Text style={styles.roleDesc}>Uso el reloj y la app mide mis signos vitales</Text>
+      <Text style={[styles.roleDesc, selected === 'adulto_mayor' && { color: COLORS.primary }]}>Mide mis signos vitales</Text>
       {selected === 'adulto_mayor' && (
         <View style={styles.roleCheck}>
-          <Ionicons name="checkmark" size={14} color="#fff" />
+          <CheckCircle size={16} color={COLORS.primary} weight="fill" />
         </View>
       )}
     </TouchableOpacity>
@@ -30,14 +31,14 @@ const RoleSelector = ({ selected, onChange }) => (
       style={[styles.roleCard, selected === 'cuidador' && styles.roleCardActiveGreen]}
       onPress={() => onChange('cuidador')}
     >
-      <MaterialCommunityIcons name="stethoscope" size={38} color={selected === 'cuidador' ? '#059669' : '#94a3b8'} />
+      <Stethoscope size={32} color={selected === 'cuidador' ? COLORS.green : COLORS.textMuted} weight={selected === 'cuidador' ? "fill" : "regular"} />
       <Text style={[styles.roleTitle, selected === 'cuidador' && styles.roleTitleActiveGreen]}>
         Cuidador
       </Text>
-      <Text style={styles.roleDesc}>Monitoreo a mi familiar de forma remota</Text>
+      <Text style={[styles.roleDesc, selected === 'cuidador' && { color: COLORS.green }]}>Monitoreo remoto</Text>
       {selected === 'cuidador' && (
-        <View style={[styles.roleCheck, { backgroundColor: '#059669' }]}>
-          <Ionicons name="checkmark" size={14} color="#fff" />
+        <View style={styles.roleCheck}>
+           <CheckCircle size={16} color={COLORS.green} weight="fill" />
         </View>
       )}
     </TouchableOpacity>
@@ -45,19 +46,19 @@ const RoleSelector = ({ selected, onChange }) => (
 );
 
 // ─── Input reutilizable ───────────────────────────────────────────────────────
-const Input = ({ label, iconName, value, onChangeText, secureTextEntry, keyboardType, placeholder }) => {
+const Input = ({ label, IconComponent, value, onChangeText, secureTextEntry, keyboardType, placeholder }) => {
   const [focused, setFocused] = useState(false);
   return (
     <View style={styles.inputGroup}>
       <Text style={styles.inputLabel}>{label}</Text>
       <View style={[styles.inputWrap, focused && styles.inputWrapFocused]}>
-        <Ionicons name={iconName} size={20} color={focused ? '#2563eb' : '#94a3b8'} />
+        <IconComponent size={20} color={focused ? COLORS.primary : COLORS.textMuted} weight={focused ? "bold" : "regular"} />
         <TextInput
           style={styles.input}
           value={value}
           onChangeText={onChangeText}
           placeholder={placeholder || ''}
-          placeholderTextColor="#a1a1aa"
+          placeholderTextColor={COLORS.textMuted}
           secureTextEntry={secureTextEntry}
           keyboardType={keyboardType || 'default'}
           autoCapitalize="none"
@@ -65,6 +66,24 @@ const Input = ({ label, iconName, value, onChangeText, secureTextEntry, keyboard
           onBlur={() => setFocused(false)}
         />
       </View>
+    </View>
+  );
+};
+
+// ─── Código de 6 Cajas ────────────────────────────────────────────────────────
+const CodeDisplay = ({ code }) => {
+  if (!code) return null;
+  const chars = code.split('');
+  return (
+    <View style={styles.codeBoxesContainer}>
+      {chars.map((char, index) => (
+        <React.Fragment key={index}>
+          <View style={styles.codeBox}>
+            <Text style={styles.codeBoxText}>{char}</Text>
+          </View>
+          {index === 2 && <View style={styles.codeSeparator} />}
+        </React.Fragment>
+      ))}
     </View>
   );
 };
@@ -126,31 +145,23 @@ export default function AuthScreen({ onAuthSuccess }) {
   if (showCode) {
     return (
       <SafeAreaView style={styles.container}>
-        <StatusBar barStyle="dark-content" backgroundColor="#f8fafc" />
+        <StatusBar barStyle="dark-content" backgroundColor={COLORS.bg} />
         <View style={styles.codeScreen}>
-          <Ionicons name="checkmark-circle" size={56} color="#22c55e" />
-          <Text style={styles.codeScreenTitle}>¡Cuenta creada!</Text>
+          <View style={styles.codeIconWrapper}>
+            <ShieldCheck size={48} color={COLORS.green} weight="fill" />
+          </View>
+          <Text style={styles.codeScreenTitle}>Bóveda de Seguridad</Text>
           <Text style={styles.codeScreenSub}>
-            Este es tu código de vinculación.{'\n'}
-            Tu cuidador lo necesita para monitorear tus signos vitales.
+            Tu cuenta médica ha sido creada. Comparte el siguiente PIN con tu cuidador para vincular tu reloj.
           </Text>
 
           <View style={styles.codeBadge}>
-            <Text style={styles.codeLabel}>TU CÓDIGO</Text>
-            <Text style={styles.codeValue}>
-              {showCode.slice(0, 3)} {showCode.slice(3)}
-            </Text>
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 4 }}>
-              <Ionicons name="lock-closed" size={14} color="#94a3b8" />
-              <Text style={styles.codeHint}>Permanente · No caduca</Text>
+            <Text style={styles.codeLabel}>PIN DE VINCULACIÓN</Text>
+            <CodeDisplay code={showCode} />
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 12 }}>
+              <LockKey size={14} color={COLORS.textMuted} weight="bold" />
+              <Text style={styles.codeHint}>Código único · Permanente</Text>
             </View>
-          </View>
-
-          <View style={styles.codeInfoBox}>
-            <Text style={styles.codeInfoText}>
-              Este código es <Text style={{ fontWeight: 'bold', color: '#1e293b' }}>permanente y único</Text>.
-              No vence nunca. Lo podrás ver siempre desde tu perfil dentro de la app.
-            </Text>
           </View>
 
           <TouchableOpacity
@@ -163,8 +174,8 @@ export default function AuthScreen({ onAuthSuccess }) {
               link_code:  showCode,
             })}
           >
-            <Text style={styles.codeBtnText}>Entrar a la app</Text>
-            <Ionicons name="arrow-forward" size={20} color="#fff" />
+            <Text style={styles.codeBtnText}>Entrar al Panel de Control</Text>
+            <CaretRight size={20} color="#fff" weight="bold" />
           </TouchableOpacity>
         </View>
       </SafeAreaView>
@@ -173,172 +184,170 @@ export default function AuthScreen({ onAuthSuccess }) {
 
   return (
     <SafeAreaView style={styles.container}>
-      <StatusBar barStyle="dark-content" backgroundColor="#f8fafc" />
-      <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
+      <StatusBar barStyle="dark-content" backgroundColor={COLORS.bg} />
+      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+        <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
 
-        {/* Logo */}
-        <View style={styles.logoArea}>
-          <View style={styles.logoCircle}>
-            <MaterialCommunityIcons name="heart-pulse" size={44} color="#dc2626" />
+          {/* Logo */}
+          <View style={styles.logoArea}>
+            <View style={styles.logoCircle}>
+              <Heartbeat size={40} color={COLORS.red} weight="fill" />
+            </View>
+            <Text style={styles.appName}>CARDIOGUARD</Text>
+            <Text style={styles.appSub}>Monitoreo Inteligente 24/7</Text>
           </View>
-          <Text style={styles.appName}>CARDIOGUARD</Text>
-          <Text style={styles.appSub}>Monitoreo de salud familiar</Text>
-        </View>
 
-        {/* Tab login/registro */}
-        <View style={styles.tabRow}>
-          <TouchableOpacity
-            style={[styles.tab, mode === 'login' && styles.tabActive]}
-            onPress={() => setMode('login')}
-          >
-            <Text style={[styles.tabText, mode === 'login' && styles.tabTextActive]}>Iniciar Sesión</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[styles.tab, mode === 'register' && styles.tabActive]}
-            onPress={() => setMode('register')}
-          >
-            <Text style={[styles.tabText, mode === 'register' && styles.tabTextActive]}>Registrarse</Text>
-          </TouchableOpacity>
-        </View>
+          {/* Tab login/registro */}
+          <View style={styles.tabRow}>
+            <TouchableOpacity
+              style={[styles.tab, mode === 'login' && styles.tabActive]}
+              onPress={() => setMode('login')}
+            >
+              <Text style={[styles.tabText, mode === 'login' && styles.tabTextActive]}>Entrar</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.tab, mode === 'register' && styles.tabActive]}
+              onPress={() => setMode('register')}
+            >
+              <Text style={[styles.tabText, mode === 'register' && styles.tabTextActive]}>Crear Cuenta</Text>
+            </TouchableOpacity>
+          </View>
 
-        <View style={styles.form}>
+          <View style={styles.form}>
 
-          {/* Selector de rol solo en registro */}
-          {mode === 'register' && (
-            <>
-              <Text style={styles.sectionLabel}>Soy...</Text>
-              <RoleSelector selected={role} onChange={setRole} />
-              <Input label="Nombre completo" iconName="person" value={fullName}
-                onChangeText={setFullName} placeholder="Ej: Juan García López" />
-            </>
-          )}
+            {/* Selector de rol solo en registro */}
+            {mode === 'register' && (
+              <>
+                <Text style={styles.sectionLabel}>Tipo de usuario:</Text>
+                <RoleSelector selected={role} onChange={setRole} />
+                <Input label="Nombre completo" IconComponent={User} value={fullName}
+                  onChangeText={setFullName} placeholder="Ej: Juan García" />
+              </>
+            )}
 
-          <Input label="Correo electrónico" iconName="mail" value={email}
-            onChangeText={setEmail} keyboardType="email-address" placeholder="usuario@correo.com" />
+            <Input label="Correo electrónico" IconComponent={EnvelopeSimple} value={email}
+              onChangeText={setEmail} keyboardType="email-address" placeholder="correo@ejemplo.com" />
 
-          <Input label="Contraseña" iconName="lock-closed" value={password}
-            onChangeText={setPassword} secureTextEntry placeholder="Mínimo 6 caracteres" />
+            <Input label="Contraseña" IconComponent={LockKey} value={password}
+              onChangeText={setPassword} secureTextEntry placeholder="••••••••" />
 
-          {/* Botón acción */}
-          <TouchableOpacity
-            style={[styles.btn, loading && styles.btnDisabled]}
-            onPress={mode === 'login' ? handleLogin : handleRegister}
-            disabled={loading}
-          >
-            {loading
-              ? <ActivityIndicator color="#fff" />
-              : <View style={styles.btnInner}>
-                  <Ionicons name={mode === 'login' ? 'log-in-outline' : 'checkmark-circle-outline'} size={22} color="#fff" />
-                  <Text style={styles.btnText}>
-                    {mode === 'login' ? 'Iniciar Sesión' : 'Crear Cuenta'}
-                  </Text>
-                </View>
-            }
-          </TouchableOpacity>
+            {/* Botón acción */}
+            <TouchableOpacity
+              style={[styles.btn, loading && styles.btnDisabled]}
+              onPress={mode === 'login' ? handleLogin : handleRegister}
+              disabled={loading}
+            >
+              {loading
+                ? <ActivityIndicator color="#fff" />
+                : <View style={styles.btnInner}>
+                    <Text style={styles.btnText}>
+                      {mode === 'login' ? 'Iniciar Sesión' : 'Registrarme'}
+                    </Text>
+                  </View>
+              }
+            </TouchableOpacity>
 
-          {/* Info rol en registro */}
-          {mode === 'register' && role === 'adulto_mayor' && (
-            <View style={styles.infoBox}>
-              <View style={{ flexDirection: 'row', gap: 8, alignItems: 'flex-start' }}>
-                <Ionicons name="information-circle" size={20} color="#2563eb" style={{ marginTop: 1 }} />
-                <Text style={[styles.infoText, { flex: 1 }]}>
-                  Al crear tu cuenta recibirás un <Text style={{ color: '#2563eb', fontWeight: 'bold' }}>código de 6 dígitos</Text> para compartir con tu cuidador.
+            {/* Info rol en registro */}
+            {mode === 'register' && role === 'adulto_mayor' && (
+              <View style={styles.infoBox}>
+                <Info size={24} color={COLORS.primary} weight="fill" />
+                <Text style={styles.infoText}>
+                  Recibirás un <Text style={{ color: COLORS.primary, fontWeight: 'bold' }}>PIN Médico</Text> para compartir con tu cuidador o familiar.
                 </Text>
               </View>
-            </View>
-          )}
-          {mode === 'register' && role === 'cuidador' && (
-            <View style={[styles.infoBox, { borderColor: '#a7f3d0', backgroundColor: '#ecfdf5' }]}>
-              <View style={{ flexDirection: 'row', gap: 8, alignItems: 'flex-start' }}>
-                <Ionicons name="information-circle" size={20} color="#059669" style={{ marginTop: 1 }} />
-                <Text style={[styles.infoText, { flex: 1 }]}>
-                  Después de registrarte podrás <Text style={{ color: '#059669', fontWeight: 'bold' }}>vincular a tu adulto mayor</Text> usando su código.
+            )}
+            {mode === 'register' && role === 'cuidador' && (
+              <View style={[styles.infoBox, { borderColor: COLORS.greenBorder, backgroundColor: COLORS.greenBg }]}>
+                <Info size={24} color={COLORS.green} weight="fill" />
+                <Text style={styles.infoText}>
+                  Tras el registro, podrás vincular el reloj del paciente usando su <Text style={{ color: COLORS.green, fontWeight: 'bold' }}>PIN de 6 dígitos</Text>.
                 </Text>
               </View>
-            </View>
-          )}
-        </View>
-      </ScrollView>
+            )}
+          </View>
+        </ScrollView>
+      </KeyboardAvoidingView>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  container:    { flex: 1, backgroundColor: '#f8fafc' },
+  container:    { flex: 1, backgroundColor: COLORS.bg },
   scroll:       { flexGrow: 1, paddingHorizontal: 24, paddingBottom: 40 },
 
-  logoArea:     { alignItems: 'center', paddingTop: 48, paddingBottom: 32 },
-  logoCircle:   { width: 88, height: 88, borderRadius: 44, backgroundColor: '#fff',
-                  borderWidth: 3, borderColor: '#fecaca', justifyContent: 'center',
-                  alignItems: 'center', marginBottom: 16,
-                  shadowColor: '#ef4444', shadowOpacity: 0.15, shadowRadius: 16, elevation: 8 },
-  appName:      { fontSize: 28, fontWeight: '900', color: '#1e293b', letterSpacing: 3 },
-  appSub:       { color: '#64748b', fontSize: 15, marginTop: 6 },
+  logoArea:     { alignItems: 'center', paddingTop: 40, paddingBottom: 32 },
+  logoCircle:   { width: 80, height: 80, borderRadius: 40, backgroundColor: '#FFF',
+                  borderWidth: 1, borderColor: COLORS.border, justifyContent: 'center',
+                  alignItems: 'center', marginBottom: 12,
+                  shadowColor: COLORS.borderDark, shadowOpacity: 0.3, shadowRadius: 10, elevation: 3 },
+  appName:      { fontSize: 24, fontWeight: '900', color: COLORS.textDark, letterSpacing: 2 },
+  appSub:       { color: COLORS.textMuted, fontSize: 13, marginTop: 4, letterSpacing: 0.5, fontWeight: '600' },
 
-  tabRow:       { flexDirection: 'row', backgroundColor: '#e2e8f0', borderRadius: 16,
-                  padding: 4, marginBottom: 24 },
-  tab:          { flex: 1, paddingVertical: 14, alignItems: 'center', borderRadius: 12 },
-  tabActive:    { backgroundColor: '#2563eb', shadowColor: '#2563eb', shadowOpacity: 0.3, shadowRadius: 8, elevation: 4 },
-  tabText:      { color: '#64748b', fontWeight: '700', fontSize: 15 },
-  tabTextActive: { color: '#fff', fontWeight: '800' },
+  tabRow:       { flexDirection: 'row', backgroundColor: COLORS.header, borderRadius: 14,
+                  padding: 4, marginBottom: 24, borderWidth: 1, borderColor: COLORS.border },
+  tab:          { flex: 1, paddingVertical: 12, alignItems: 'center', borderRadius: 10 },
+  tabActive:    { backgroundColor: '#FFF', shadowColor: '#000', shadowOpacity: 0.05, shadowRadius: 4, elevation: 2 },
+  tabText:      { color: COLORS.textMuted, fontWeight: '700', fontSize: 14 },
+  tabTextActive: { color: COLORS.primary, fontWeight: '800' },
 
-  form:         { gap: 16 },
-  sectionLabel: { color: '#475569', fontSize: 15, fontWeight: '700', letterSpacing: 0.5, marginBottom: -4 },
+  form:         { gap: 20 },
+  sectionLabel: { color: COLORS.textMuted, fontSize: 12, fontWeight: '800', letterSpacing: 0.5, marginBottom: -8, textTransform: 'uppercase' },
 
   roleRow:      { flexDirection: 'row', gap: 12 },
-  roleCard:     { flex: 1, backgroundColor: '#fff', borderRadius: 18, padding: 18,
-                  borderWidth: 2, borderColor: '#e2e8f0', alignItems: 'center', gap: 8,
-                  shadowColor: '#000', shadowOpacity: 0.04, shadowRadius: 8, elevation: 2 },
-  roleCardActive: { borderColor: '#2563eb', backgroundColor: '#eff6ff' },
-  roleCardActiveGreen: { borderColor: '#059669', backgroundColor: '#ecfdf5' },
-  roleCheck:    { position: 'absolute', top: 10, right: 10, width: 22, height: 22,
-                  borderRadius: 11, backgroundColor: '#2563eb', justifyContent: 'center', alignItems: 'center' },
-  roleTitle:    { color: '#475569', fontSize: 14, fontWeight: '800' },
-  roleTitleActive: { color: '#2563eb' },
-  roleTitleActiveGreen: { color: '#059669' },
-  roleDesc:     { color: '#94a3b8', fontSize: 11, textAlign: 'center', lineHeight: 16 },
+  roleCard:     { flex: 1, backgroundColor: '#FFF', borderRadius: 16, padding: 16,
+                  borderWidth: 1, borderColor: COLORS.border, alignItems: 'center', gap: 8 },
+  roleCardActive: { borderColor: COLORS.primary, backgroundColor: COLORS.blueBg },
+  roleCardActiveGreen: { borderColor: COLORS.green, backgroundColor: COLORS.greenBg },
+  roleCheck:    { position: 'absolute', top: 10, right: 10 },
+  roleTitle:    { color: COLORS.textMuted, fontSize: 13, fontWeight: '800' },
+  roleTitleActive: { color: COLORS.primary },
+  roleTitleActiveGreen: { color: COLORS.green },
+  roleDesc:     { color: COLORS.textMuted, fontSize: 10, textAlign: 'center', lineHeight: 14, fontWeight: '600' },
 
-  inputGroup:   { gap: 6 },
-  inputLabel:   { color: '#475569', fontSize: 14, fontWeight: '700', letterSpacing: 0.3 },
-  inputWrap:    { flexDirection: 'row', alignItems: 'center', backgroundColor: '#fff',
-                  borderRadius: 14, borderWidth: 2, borderColor: '#e2e8f0',
-                  paddingHorizontal: 14, gap: 10,
-                  shadowColor: '#000', shadowOpacity: 0.03, shadowRadius: 4, elevation: 1 },
-  inputWrapFocused: { borderColor: '#2563eb', shadowColor: '#2563eb', shadowOpacity: 0.15 },
-  input:        { flex: 1, color: '#1e293b', fontSize: 16, paddingVertical: 16 },
+  inputGroup:   { gap: 8 },
+  inputLabel:   { color: COLORS.textDark, fontSize: 12, fontWeight: '800', letterSpacing: 0.5 },
+  inputWrap:    { flexDirection: 'row', alignItems: 'center', backgroundColor: '#FFF',
+                  borderRadius: 14, borderWidth: 1, borderColor: COLORS.border,
+                  paddingHorizontal: 16, gap: 12 },
+  inputWrapFocused: { borderColor: COLORS.primary, backgroundColor: '#FFF' },
+  input:        { flex: 1, color: COLORS.textDark, fontSize: 15, paddingVertical: 16, fontWeight: '600' },
 
-  btn:          { backgroundColor: '#2563eb', paddingVertical: 18, borderRadius: 30,
-                  alignItems: 'center', marginTop: 8,
-                  shadowColor: '#2563eb', shadowOpacity: 0.3, shadowRadius: 12, elevation: 4 },
-  btnDisabled:  { opacity: 0.6 },
+  btn:          { backgroundColor: COLORS.primary, paddingVertical: 18, borderRadius: 28,
+                  alignItems: 'center', marginTop: 12,
+                  shadowColor: COLORS.primary, shadowOpacity: 0.3, shadowRadius: 8, elevation: 4 },
+  btnDisabled:  { opacity: 0.5 },
   btnInner:     { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  btnText:      { color: '#fff', fontSize: 17, fontWeight: '800', letterSpacing: 0.5 },
+  btnText:      { color: '#FFFFFF', fontSize: 16, fontWeight: '800', letterSpacing: 0.5 },
 
-  infoBox:      { backgroundColor: '#eff6ff', borderRadius: 14, borderWidth: 1,
-                  borderColor: '#bfdbfe', padding: 16 },
-  infoText:     { color: '#475569', fontSize: 14, lineHeight: 22 },
+  infoBox:      { flexDirection: 'row', backgroundColor: COLORS.blueBg, borderRadius: 12, borderWidth: 1,
+                  borderColor: COLORS.blueBorder, padding: 16, alignItems: 'center', gap: 12 },
+  infoText:     { color: COLORS.textDark, fontSize: 12, lineHeight: 18, flex: 1, fontWeight: '600' },
 
   // ── Pantalla de código ──────────────────────────────────────────────────
   codeScreen:   { flex: 1, justifyContent: 'center', alignItems: 'center',
-                  paddingHorizontal: 28, gap: 22 },
-  codeScreenTitle: { fontSize: 30, fontWeight: '900', color: '#1e293b', textAlign: 'center' },
-  codeScreenSub:   { color: '#64748b', fontSize: 16, textAlign: 'center', lineHeight: 24 },
+                  paddingHorizontal: 28, gap: 24 },
+  codeIconWrapper:{ width: 80, height: 80, borderRadius: 40, backgroundColor: COLORS.greenBg,
+                  justifyContent: 'center', alignItems: 'center', borderWidth: 1, borderColor: COLORS.greenBorder },
+  codeScreenTitle: { fontSize: 26, fontWeight: '900', color: COLORS.textDark, textAlign: 'center', letterSpacing: 0.5 },
+  codeScreenSub:   { color: COLORS.textMuted, fontSize: 13, textAlign: 'center', lineHeight: 20, fontWeight: '600' },
 
-  codeBadge:    { width: '100%', backgroundColor: '#fff', borderRadius: 24,
-                  borderWidth: 3, borderColor: '#2563eb', paddingVertical: 36,
-                  alignItems: 'center', gap: 10,
-                  shadowColor: '#2563eb', shadowOpacity: 0.15, shadowRadius: 20, elevation: 8 },
-  codeLabel:    { color: '#2563eb', fontSize: 12, fontWeight: '900', letterSpacing: 4 },
-  codeValue:    { fontSize: 48, fontWeight: '900', color: '#1e293b', letterSpacing: 14 },
-  codeHint:     { color: '#94a3b8', fontSize: 13 },
+  codeBadge:    { width: '100%', backgroundColor: '#FFF', borderRadius: 20,
+                  borderWidth: 1, borderColor: COLORS.border, paddingVertical: 30, paddingHorizontal: 20,
+                  alignItems: 'center', gap: 16,
+                  shadowColor: COLORS.borderDark, shadowOpacity: 0.2, shadowRadius: 10, elevation: 4 },
+  codeLabel:    { color: COLORS.textMuted, fontSize: 11, fontWeight: '800', letterSpacing: 2 },
+  
+  codeBoxesContainer: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 },
+  codeBox:      { backgroundColor: COLORS.bg, borderWidth: 1, borderColor: COLORS.primary,
+                  borderRadius: 12, width: 44, height: 56, justifyContent: 'center', alignItems: 'center' },
+  codeBoxText:  { color: COLORS.primary, fontSize: 24, fontWeight: '900' },
+  codeSeparator:{ width: 12, height: 3, backgroundColor: COLORS.borderDark, borderRadius: 2 },
 
-  codeInfoBox:  { backgroundColor: '#ecfdf5', borderRadius: 16, borderWidth: 1,
-                  borderColor: '#a7f3d0', padding: 18, width: '100%' },
-  codeInfoText: { color: '#475569', fontSize: 14, lineHeight: 22, textAlign: 'center' },
+  codeHint:     { color: COLORS.textMuted, fontSize: 11, fontWeight: '700' },
 
-  codeBtn:      { backgroundColor: '#2563eb', paddingVertical: 18, paddingHorizontal: 40,
+  codeBtn:      { backgroundColor: COLORS.green, paddingVertical: 18, paddingHorizontal: 30,
                   borderRadius: 30, alignItems: 'center', width: '100%',
-                  flexDirection: 'row', justifyContent: 'center', gap: 10,
-                  shadowColor: '#2563eb', shadowOpacity: 0.3, shadowRadius: 12, elevation: 4 },
-  codeBtnText:  { color: '#fff', fontSize: 18, fontWeight: '900' },
+                  flexDirection: 'row', justifyContent: 'center', gap: 12,
+                  shadowColor: COLORS.green, shadowOpacity: 0.3, shadowRadius: 8, elevation: 4 },
+  codeBtnText:  { color: '#FFFFFF', fontSize: 15, fontWeight: '900', letterSpacing: 0.5 },
 });

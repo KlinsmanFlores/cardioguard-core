@@ -68,6 +68,25 @@ export const getCurrentLocation = async () => {
 };
 
 /**
+ * Calcula la distancia en metros entre dos coordenadas (Haversine)
+ */
+const getDistance = (lat1, lon1, lat2, lon2) => {
+  if (!lat1 || !lon1 || !lat2 || !lon2) return Infinity;
+  const R = 6371e3; // Radio de la Tierra en metros
+  const phi1 = lat1 * Math.PI / 180;
+  const phi2 = lat2 * Math.PI / 180;
+  const deltaPhi = (lat2 - lat1) * Math.PI / 180;
+  const deltaLambda = (lon2 - lon1) * Math.PI / 180;
+
+  const a = Math.sin(deltaPhi / 2) * Math.sin(deltaPhi / 2) +
+            Math.cos(phi1) * Math.cos(phi2) *
+            Math.sin(deltaLambda / 2) * Math.sin(deltaLambda / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+
+  return R * c;
+};
+
+/**
  * Inicia un watcher que actualiza la ubicación continuamente
  * @param {function} onUpdate - Callback con {lat, lng, address, accuracy}
  * @returns {Promise<void>}
@@ -82,26 +101,32 @@ export const startLocationWatch = async (onUpdate) => {
     locationSubscription = await Location.watchPositionAsync(
       {
         accuracy:          Location.Accuracy.Balanced,
-        timeInterval:      15000,   // Cada 15 segundos
+        timeInterval:      180000,  // Cada 3 minutos (180,000 ms)
         distanceInterval:  10,      // O si se mueve más de 10 metros
       },
       async (pos) => {
         const { latitude: lat, longitude: lng, accuracy } = pos.coords;
         let address = lastKnownLocation?.address || null;
 
-        // Solo re-geocodificar si cambió más de 50 metros
-        try {
-          const [place] = await Location.reverseGeocodeAsync({ latitude: lat, longitude: lng });
-          if (place) {
-            const parts = [
-              place.street,
-              place.streetNumber ? `#${place.streetNumber}` : null,
-              place.district || place.subregion,
-              place.city,
-            ].filter(Boolean);
-            address = parts.join(', ');
-          }
-        } catch (_) {}
+        // Solo re-geocodificar si cambió más de 50 metros o no tiene dirección previa
+        const dist = lastKnownLocation 
+          ? getDistance(lastKnownLocation.lat, lastKnownLocation.lng, lat, lng)
+          : Infinity;
+
+        if (dist > 50 || !address) {
+          try {
+            const [place] = await Location.reverseGeocodeAsync({ latitude: lat, longitude: lng });
+            if (place) {
+              const parts = [
+                place.street,
+                place.streetNumber ? `#${place.streetNumber}` : null,
+                place.district || place.subregion,
+                place.city,
+              ].filter(Boolean);
+              address = parts.join(', ');
+            }
+          } catch (_) {}
+        }
 
         const location = { lat, lng, address, accuracy };
         lastKnownLocation = location;

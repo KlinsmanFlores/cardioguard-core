@@ -6,6 +6,7 @@ import { parseHealthMetrics } from '../services/ble/packetParser';
 import { bleQueue } from '../services/ble/bleQueue';
 import { startForegroundShield, stopForegroundShield } from '../services/background/foregroundShield';
 import { saveBpmReading, saveSpo2Reading, savePressureReading } from '../services/storageService';
+import { getLastKnownLocation } from '../services/locationService';
 
 const BleManagerModule   = NativeModules.BleManager;
 const bleManagerEmitter  = new NativeEventEmitter(BleManagerModule);
@@ -70,11 +71,55 @@ export function useBLE() {
   const hasTriggeredPPGRef = useRef(false);
   const manualTriggerActiveRef = useRef(false);
   const lastCascadeTimeRef = useRef(0);
+  const isFinalizedRef = useRef(false);
 
   // Sincronizar el ref de conexión con el estado global de Zustand
   useEffect(() => {
     isConnectedRef.current = isConnected;
   }, [isConnected]);
+
+  // --- FINALIZADOR E INSTANCIA EXCLUSIVA DE GUARDADO (EVITA DUPLICADOS Y PÉRDIDAS) ---
+  const finalizeActiveMeasurement = useCallback(async (targetId = null) => {
+    const id = targetId || deviceIdRef.current;
+    if (isFinalizedRef.current) return;
+    isFinalizedRef.current = true;
+
+    const store = useBleStore.getState();
+    const activeMetric = currentMetricTypeRef.current;
+    const currentLoc = getLastKnownLocation();
+
+    bleLog(`[BLE APP] 💾 Finalizando medición activa en espejo (Métrica Tipo: ${activeMetric}) | GPS: ${currentLoc ? '📍' : 'null'}`);
+
+    try {
+      if (activeMetric === 1) {
+        const finalBpm = store.bpm;
+        if (finalBpm > 0) {
+          bleLog(`[DB SAVE] 💾 Guardando ritmo cardíaco definitivo: ${finalBpm} BPM`);
+          await saveBpmReading(finalBpm, currentLoc);
+        }
+      } else if (activeMetric === 2) {
+        const finalSpo2 = store.spo2;
+        if (finalSpo2 > 0) {
+          bleLog(`[DB SAVE] 💾 Guardando saturación SpO2 definitiva: ${finalSpo2}%`);
+          await saveSpo2Reading(finalSpo2, currentLoc);
+        }
+      } else if (activeMetric === 3) {
+        const finalSys = store.pressure.sys;
+        const finalDia = store.pressure.dia;
+        if (finalSys > 0 && finalDia > 0) {
+          bleLog(`[DB SAVE] 💾 Guardando presión arterial definitiva: ${finalSys}/${finalDia} mmHg`);
+          await savePressureReading(finalSys, finalDia, currentLoc);
+        }
+      }
+    } catch (err) {
+      bleError('[BLE SAVE ERROR] Error guardando medición definitiva:', err);
+    } finally {
+      // Liberar el estado de ocupado
+      isBluetoothBusyRef.current = false;
+      store.setBluetoothBusy(false);
+      if (busyTimeout.current) clearTimeout(busyTimeout.current);
+    }
+  }, [saveBpmReading, saveSpo2Reading, savePressureReading]);
 
   // Inicialización de Foreground Service al montar el hook (previene context-shift drops posteriores)
   useEffect(() => {
@@ -324,6 +369,61 @@ export function useBLE() {
     }, 12000); // Latido cada 12 segundos para evitar auto-sleep y desconexión sin saturar el canal (menos agresivo)
   }, [resolvedHealthWriteServiceRef, resolvedHealthWriteRef]);
 
+  const syncWatchTime = useCallback(async (targetId = null) => {
+    const id = targetId || deviceIdRef.current;
+    if (!id || !isConnectedRef.current) return;
+    try {
+      const localDate = new Date();
+
+      // Extract components in local time
+      const year = localDate.getFullYear();
+      const month = localDate.getMonth(); // 0-11
+      const date = localDate.getDate();
+      const hours = localDate.getHours();
+      const minutes = localDate.getMinutes();
+      const seconds = localDate.getSeconds();
+
+      // Get Unix timestamp in seconds treating local time directly as UTC
+      const utcTimeSeconds = Date.UTC(year, month, date, hours, minutes, seconds) / 1000;
+
+      // Apply the 8-hour offset to counteract GMT+8 in the watch's firmware
+      const watchTime = Math.floor(utcTimeSeconds - 28800);
+
+      // Structure 10-byte packet:
+      // Byte 0-1: 0xFE, 0xEA (Moyoung protocol prefix)
+      // Byte 2:   0x10 (Standard MTU format)
+      // Byte 3:   0x0A (Total packet length: 10 bytes)
+      // Byte 4:   0x31 (CMD_SYNC_TIME)
+      // Byte 5-8: 32-bit Big-Endian watchTime timestamp
+      // Byte 9:   0x08 (Trailing timezone byte)
+      const packet = [
+        0xFE,
+        0xEA,
+        0x10,
+        0x0A,
+        0x31,
+        (watchTime >> 24) & 0xFF,
+        (watchTime >> 16) & 0xFF,
+        (watchTime >> 8) & 0xFF,
+        watchTime & 0xFF,
+        0x08
+      ];
+      
+      const timeStr = `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+      bleLog(`[BLE APP] ⌚ Sincronizando hora del reloj Moyoung V2 (GMT+8 offset): ${timeStr}`);
+      useBleStore.getState().addRawLog(`📤 [TX] Sincronizando hora: ${timeStr}`);
+      
+      await bleQueue.writeWithoutResponse(
+        id,
+        resolvedHealthWriteServiceRef.current,
+        resolvedHealthWriteRef.current,
+        packet
+      );
+    } catch (e) {
+      bleError('Error en syncWatchTime:', e);
+    }
+  }, [resolvedHealthWriteServiceRef, resolvedHealthWriteRef]);
+
   const connectToDevice = async (id) => {
     try {
       useBleStore.getState().setStatusMsg('Conectando al reloj...');
@@ -462,6 +562,13 @@ export function useBLE() {
       reconnectAttempts.current = 0;
       
       startKeepAlive(id);
+      
+      // Sincronizar hora del reloj automáticamente con un ligero retraso de estabilización (2s)
+      setTimeout(() => {
+        if (isConnectedRef.current) {
+          syncWatchTime(id).catch(err => bleError('[BLE TIME SYNC ERROR]', err));
+        }
+      }, 2000);
       // startForegroundShield(); // Ya inicializado de forma segura en useEffect de montaje
       
     } catch (err) {
@@ -757,18 +864,10 @@ export function useBLE() {
                 const activeResolver = store.activeResolver;
 
                 store.setBpm(bpm);
-                bleLog(`[CARDIOGUARD TELEMETRÍA NATIVA] ❤️ BPM Basal Decodificado: ${bpm} (Identificador 0x6D)`);
+                bleLog(`[CARDIOGUARD TELEMETRÍA NATIVA] ❤️ BPM Basal Decodificado (Progreso): ${bpm} (Identificador 0x6D)`);
 
                 if (activeResolver && activeResolver.metric === 'bpm') {
                   activeResolver.values.push(bpm);
-                } else if (!activeResolver) {
-                  saveBpmReading(bpm).catch(err => bleError('[BLE BPM SAVE ERROR]', err));
-                }
-
-                if (!activeResolver) {
-                  isBluetoothBusyRef.current = false;
-                  useBleStore.getState().setBluetoothBusy(false);
-                  if (busyTimeout.current) clearTimeout(busyTimeout.current);
                 }
               }
               return;
@@ -792,20 +891,12 @@ export function useBLE() {
                 const activeResolver = store.activeResolver;
 
                 store.setPressure(sbp, dbp);
-                bleLog(`[CARDIOGUARD TELEMETRÍA NATIVA] 🩸 Tensión Decodificada: ${sbp}/${dbp} mmHg (Identificador 0x69)`);
+                bleLog(`[CARDIOGUARD TELEMETRÍA NATIVA] 🩸 Tensión Decodificada (Progreso): ${sbp}/${dbp} mmHg (Identificador 0x69)`);
 
                 if (activeResolver && activeResolver.metric === 'pressure') {
                   activeResolver.values.push({ sys: sbp, dia: dbp });
-                } else if (!activeResolver) {
-                  savePressureReading(sbp, dbp).catch(err => bleError('[BLE PRESSURE SAVE ERROR]', err));
                 }
-
-                if (!activeResolver) {
-                  isBluetoothBusyRef.current = false;
-                  useBleStore.getState().setBluetoothBusy(false);
-                  if (busyTimeout.current) clearTimeout(busyTimeout.current);
-                }
-                useBleStore.getState().setStatusMsg(`Medición de presión completada: ${sbp}/${dbp} mmHg`);
+                useBleStore.getState().setStatusMsg(`Midiendo presión arterial... ${sbp}/${dbp} mmHg`);
               }
               return;
             }
@@ -825,20 +916,12 @@ export function useBLE() {
                 const activeResolver = store.activeResolver;
 
                 store.setSpO2(spo2);
-                bleLog(`[CARDIOGUARD TELEMETRÍA NATIVA] 🫁 SpO2 Real Decodificado: ${spo2}% (Identificador 0x6B)`);
+                bleLog(`[CARDIOGUARD TELEMETRÍA NATIVA] 🫁 SpO2 Real Decodificado (Progreso): ${spo2}% (Identificador 0x6B)`);
 
                 if (activeResolver && activeResolver.metric === 'spo2') {
                   activeResolver.values.push(spo2);
-                } else if (!activeResolver) {
-                  saveSpo2Reading(spo2).catch(err => bleError('[BLE SPO2 SAVE ERROR]', err));
                 }
-
-                if (!activeResolver) {
-                  isBluetoothBusyRef.current = false;
-                  useBleStore.getState().setBluetoothBusy(false);
-                  if (busyTimeout.current) clearTimeout(busyTimeout.current);
-                }
-                useBleStore.getState().setStatusMsg(`Medición de oxígeno completada: ${spo2}%`);
+                useBleStore.getState().setStatusMsg(`Midiendo saturación SpO2... ${spo2}%`);
               }
               return;
             }
@@ -856,16 +939,19 @@ export function useBLE() {
               bleLog(`[CARDIOGUARD TELEMETRÍA] 🔄 Estado de medición en reloj: ${status}`);
               if (status === 0x01) {
                 useBleStore.getState().setStatusMsg('🩺 Medición de ritmo cardíaco activa. Mantente quieto...');
+                currentMetricTypeRef.current = 1; // Ritmo cardíaco (BPM)
+                isFinalizedRef.current = false;
               } else if (status === 0x02) {
                 useBleStore.getState().setStatusMsg('🫁 Medición de oxígeno SpO₂ activa. Mantente quieto...');
+                currentMetricTypeRef.current = 2; // Oxígeno (SpO2)
+                isFinalizedRef.current = false;
               } else if (status === 0x03) {
                 useBleStore.getState().setStatusMsg('🩺 Medición de presión arterial activa. Mantente quieto...');
+                currentMetricTypeRef.current = 3; // Presión arterial
+                isFinalizedRef.current = false;
               } else if (status === 0x04) {
                 useBleStore.getState().setStatusMsg('✅ Medición completada en el reloj.');
-                // Liberar el estado de ocupado
-                isBluetoothBusyRef.current = false;
-                useBleStore.getState().setBluetoothBusy(false);
-                if (busyTimeout.current) clearTimeout(busyTimeout.current);
+                finalizeActiveMeasurement(id);
               }
               return;
             }
@@ -879,28 +965,19 @@ export function useBLE() {
 
             if (health.type === 'SPO2') {
               store.setSpo2(health.value);
-              saveSpo2Reading(health.value).catch(err => bleError('[BLE SPO2 SAVE ERROR]', err));
-              bleLog(`[CARDIOGUARD OXIGENO] 🫁 SpO2 Real Decodificado (Fallback): ${health.value}%`);
+              bleLog(`[CARDIOGUARD OXIGENO] 🫁 SpO2 Real Decodificado (Fallback - Progreso): ${health.value}%`);
 
               if (activeResolver && activeResolver.metric === 'spo2') {
                 activeResolver.values.push(health.value);
               }
             } else if (health.type === 'BPM') {
               store.setBpm(health.value);
-              saveBpmReading(health.value).catch(err => bleError('[BLE BPM SAVE ERROR]', err));
-              bleLog(`[CARDIOGUARD PULSE] ❤️ BPM (Fallback): ${health.value}`);
+              bleLog(`[CARDIOGUARD PULSE] ❤️ BPM (Fallback - Progreso): ${health.value}`);
 
               if (activeResolver && activeResolver.metric === 'bpm') {
                 activeResolver.values.push(health.value);
               }
             }
-
-            if (!activeResolver) {
-              isBluetoothBusyRef.current = false;
-              useBleStore.getState().setBluetoothBusy(false);
-              if (busyTimeout.current) clearTimeout(busyTimeout.current);
-            }
-            useBleStore.getState().setStatusMsg(`Medición completada: ${health.value}`);
             return;
           }
 
@@ -912,17 +989,10 @@ export function useBLE() {
               const store = useBleStore.getState();
               const activeResolver = store.activeResolver;
               store.setPressure(sbp, dbp);
-              savePressureReading(sbp, dbp).catch(err => bleError('[BLE PRESSURE SAVE ERROR]', err));
-              bleLog(`[CARDIOGUARD TELEMETRÍA] 🩸 Tensión Decodificada (Fallback): ${sbp}/${dbp} mmHg`);
+              bleLog(`[CARDIOGUARD TELEMETRÍA] 🩸 Tensión Decodificada (Fallback - Progreso): ${sbp}/${dbp} mmHg`);
 
               if (activeResolver && activeResolver.metric === 'pressure') {
                 activeResolver.values.push({ sys: sbp, dia: dbp });
-              }
-
-              if (!activeResolver) {
-                isBluetoothBusyRef.current = false;
-                useBleStore.getState().setBluetoothBusy(false);
-                if (busyTimeout.current) clearTimeout(busyTimeout.current);
               }
             }
           }
@@ -932,17 +1002,10 @@ export function useBLE() {
               const store = useBleStore.getState();
               const activeResolver = store.activeResolver;
               store.setSpO2(spo2);
-              saveSpo2Reading(spo2).catch(err => bleError('[BLE SPO2 SAVE ERROR]', err));
-              bleLog(`[CARDIOGUARD OXIGENO] 🫁 SpO2 Real Decodificado (Fallback): ${spo2}%`);
+              bleLog(`[CARDIOGUARD OXIGENO] 🫁 SpO2 Real Decodificado (Fallback - Progreso): ${spo2}%`);
 
               if (activeResolver && activeResolver.metric === 'spo2') {
                 activeResolver.values.push(spo2);
-              }
-
-              if (!activeResolver) {
-                isBluetoothBusyRef.current = false;
-                useBleStore.getState().setBluetoothBusy(false);
-                if (busyTimeout.current) clearTimeout(busyTimeout.current);
               }
             }
           }
@@ -953,17 +1016,10 @@ export function useBLE() {
               const store = useBleStore.getState();
               const activeResolver = store.activeResolver;
               store.setSpO2(spo2);
-              saveSpo2Reading(spo2).catch(err => bleError('[BLE SPO2 SAVE ERROR]', err));
-              bleLog(`[CARDIOGUARD TELEMETRÍA] 🩸 SpO2 alternativo (Fallback): ${spo2}%`);
+              bleLog(`[CARDIOGUARD TELEMETRÍA] 🩸 SpO2 alternativo (Fallback - Progreso): ${spo2}%`);
 
               if (activeResolver && activeResolver.metric === 'spo2') {
                 activeResolver.values.push(spo2);
-              }
-
-              if (!activeResolver) {
-                isBluetoothBusyRef.current = false;
-                useBleStore.getState().setBluetoothBusy(false);
-                if (busyTimeout.current) clearTimeout(busyTimeout.current);
               }
             }
           }
@@ -1034,6 +1090,7 @@ export function useBLE() {
       return;
     }
 
+    isFinalizedRef.current = false;
     currentMetricTypeRef.current = 1;
     bleLog('[BLE APP] 🟢 Iniciando medición manual BPM en vivo (CMD 0x6D)...');
     
@@ -1047,17 +1104,17 @@ export function useBLE() {
       useBleStore.getState().addRawLog('[TX] FE EA 20 06 6D 00 (Start BPM)');
       await bleQueue.writeWithoutResponse(id, resolvedHealthWriteServiceRef.current, resolvedHealthWriteRef.current, packet);
 
-      // Restablecer de forma segura la vigilia automática tras 20 segundos
-      setTimeout(() => {
-        isBluetoothBusyRef.current = false;
-        useBleStore.getState().setBluetoothBusy(false);
-      }, 20000);
+      if (busyTimeout.current) clearTimeout(busyTimeout.current);
+      busyTimeout.current = setTimeout(() => {
+        bleLog('[BLE APP] ⚠️ Timeout de 45 segundos alcanzado en BPM. Forzando guardado de respaldo...');
+        finalizeActiveMeasurement(id);
+      }, 45000);
     } catch (e) {
       bleError('[BLE APP] Error al disparar BPM desde Dashboard:', e);
       isBluetoothBusyRef.current = false;
       useBleStore.getState().setBluetoothBusy(false);
     }
-  }, [resolvedHealthWriteServiceRef, resolvedHealthWriteRef]);
+  }, [resolvedHealthWriteServiceRef, resolvedHealthWriteRef, finalizeActiveMeasurement]);
 
   const triggerAppSpO2 = useCallback(async () => {
     const id = deviceIdRef.current;
@@ -1066,6 +1123,7 @@ export function useBLE() {
       return;
     }
 
+    isFinalizedRef.current = false;
     currentMetricTypeRef.current = 2;
     bleLog('[BLE APP] 🟢 Iniciando medición manual SpO2 en vivo (CMD 0x6B)...');
     
@@ -1079,17 +1137,17 @@ export function useBLE() {
       useBleStore.getState().addRawLog('[TX] FE EA 20 06 6B 00 (Start SpO2)');
       await bleQueue.writeWithoutResponse(id, resolvedHealthWriteServiceRef.current, resolvedHealthWriteRef.current, packet);
 
-      // Restablecer vigilia automática
-      setTimeout(() => {
-        isBluetoothBusyRef.current = false;
-        useBleStore.getState().setBluetoothBusy(false);
-      }, 20000);
+      if (busyTimeout.current) clearTimeout(busyTimeout.current);
+      busyTimeout.current = setTimeout(() => {
+        bleLog('[BLE APP] ⚠️ Timeout de 45 segundos alcanzado en SpO2. Forzando guardado de respaldo...');
+        finalizeActiveMeasurement(id);
+      }, 45000);
     } catch (e) {
       bleError('[BLE APP] Error al disparar SpO2 desde Dashboard:', e);
       isBluetoothBusyRef.current = false;
       useBleStore.getState().setBluetoothBusy(false);
     }
-  }, [resolvedHealthWriteServiceRef, resolvedHealthWriteRef]);
+  }, [resolvedHealthWriteServiceRef, resolvedHealthWriteRef, finalizeActiveMeasurement]);
 
   const triggerAppPressure = useCallback(async () => {
     const id = deviceIdRef.current;
@@ -1098,6 +1156,7 @@ export function useBLE() {
       return;
     }
 
+    isFinalizedRef.current = false;
     currentMetricTypeRef.current = 3;
     bleLog('[BLE APP] 🟢 Iniciando medición manual Presión Arterial en vivo (CMD 0x69)...');
     
@@ -1111,17 +1170,17 @@ export function useBLE() {
       useBleStore.getState().addRawLog('[TX] FE EA 20 08 69 00 00 00 (Start Blood Pressure)');
       await bleQueue.writeWithoutResponse(id, resolvedHealthWriteServiceRef.current, resolvedHealthWriteRef.current, packet);
 
-      // Restablecer vigilia automática
-      setTimeout(() => {
-        isBluetoothBusyRef.current = false;
-        useBleStore.getState().setBluetoothBusy(false);
-      }, 20000);
+      if (busyTimeout.current) clearTimeout(busyTimeout.current);
+      busyTimeout.current = setTimeout(() => {
+        bleLog('[BLE APP] ⚠️ Timeout de 45 segundos alcanzado en Presión. Forzando guardado de respaldo...');
+        finalizeActiveMeasurement(id);
+      }, 45000);
     } catch (e) {
       bleError('[BLE APP] Error al disparar Presión desde Dashboard:', e);
       isBluetoothBusyRef.current = false;
       useBleStore.getState().setBluetoothBusy(false);
     }
-  }, [resolvedHealthWriteServiceRef, resolvedHealthWriteRef]);
+  }, [resolvedHealthWriteServiceRef, resolvedHealthWriteRef, finalizeActiveMeasurement]);
 
   const findMyWatch = useCallback(async () => {
     const id = deviceIdRef.current;
@@ -1180,13 +1239,14 @@ export function useBLE() {
     triggerAppPressure,
     findMyWatch,
     powerOffWatch,
-    enableQuickView
+    enableQuickView,
+    syncWatchTime
   };
 
   useEffect(() => {
     bleLog('[BLE] 🔄 Vinculando acciones globales del motor BLE en Zustand...');
     useBleStore.setState(actions);
-  }, [startScan, disconnectDevice, triggerMeasurement, triggerAppBPM, triggerAppSpO2, triggerAppPressure, findMyWatch, powerOffWatch, enableQuickView]);
+  }, [startScan, disconnectDevice, triggerMeasurement, triggerAppBPM, triggerAppSpO2, triggerAppPressure, findMyWatch, powerOffWatch, enableQuickView, syncWatchTime, finalizeActiveMeasurement]);
 
   return actions;
 }

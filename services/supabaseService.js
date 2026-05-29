@@ -5,11 +5,13 @@ const SESSION_KEY = '@cardioguard_session';
 
 // ─── Umbrales de alerta ───────────────────────────────────────────────────────
 export const ALERT_THRESHOLDS = {
-  BPM_HIGH:   120,
-  BPM_LOW:    45,
-  SPO2_LOW:   90,
-  SYS_HIGH:   160,
-  DIA_HIGH:   100,
+  BPM_HIGH:   100, // Taquicardia (mayor a 100 BPM)
+  BPM_LOW:    60,  // Bradicardia (menor a 60 BPM)
+  SPO2_LOW:   90,  // Riesgo crítico por altura en Arequipa (menor a 90%)
+  SYS_HIGH:   130, // Hipertensión sistólica (mayor a 130 mmHg)
+  DIA_HIGH:   80,  // Hipertensión diastólica (mayor a 80 mmHg)
+  SYS_LOW:    90,  // Hipotensión sistólica (menor a 90 mmHg)
+  DIA_LOW:    60,  // Hipotensión diastólica (menor a 60 mmHg)
 };
 
 // ─── AUTH ─────────────────────────────────────────────────────────────────────
@@ -130,6 +132,36 @@ export const getLocalSession = async () => {
   } catch (_) { return null; }
 };
 
+/**
+ * Actualiza la sesión local con los nuevos datos
+ */
+export const updateLocalSession = async (updates) => {
+  try {
+    const current = await getLocalSession();
+    if (!current) return;
+    const newData = { ...current, ...updates };
+    await AsyncStorage.setItem(SESSION_KEY, JSON.stringify(newData));
+    return newData;
+  } catch (e) {
+    console.error('Error updating local session:', e);
+  }
+};
+
+/**
+ * Actualiza el perfil del usuario en la tabla profiles
+ */
+export const updateUserProfile = async (userId, data) => {
+  try {
+    const { error } = await supabase
+      .from('profiles')
+      .update(data)
+      .eq('id', userId);
+    if (error) throw error;
+    return { success: true };
+  } catch (e) {
+    return { success: false, error: e.message };
+  }
+};
 
 // ─── MÉTRICAS ─────────────────────────────────────────────────────────────────
 
@@ -259,7 +291,7 @@ export const getCaregiverPatients = async (caregiverId) => {
   try {
     const { data, error } = await supabase
       .from('care_links')
-      .select('patient_id, profiles!care_links_patient_id_fkey(id, full_name, email, link_code, is_auto_mode)')
+      .select('patient_id, profiles!care_links_patient_id_fkey(id, full_name, email, link_code, is_auto_mode, watch_battery_level)')
       .eq('caregiver_id', caregiverId);
 
     if (error) return [];
@@ -274,33 +306,54 @@ const checkAndCreateAlert = async ({ userId, type, value, location }) => {
   let message = '';
 
   if (type === 'BPM') {
-    if (value > ALERT_THRESHOLDS.BPM_HIGH) { isAlert = true; message = `⚠️ Frecuencia alta: ${value} BPM`; }
-    if (value < ALERT_THRESHOLDS.BPM_LOW)  { isAlert = true; message = `⚠️ Frecuencia baja: ${value} BPM`; }
+    if (value > ALERT_THRESHOLDS.BPM_HIGH) { isAlert = true; message = `🚨 Taquicardia: Pulso elevado a ${value} BPM`; }
+    if (value < ALERT_THRESHOLDS.BPM_LOW)  { isAlert = true; message = `🚨 Bradicardia: Pulso bajo a ${value} BPM`; }
   }
   if (type === 'SPO2' && value < ALERT_THRESHOLDS.SPO2_LOW) {
-    isAlert = true; message = `⚠️ Saturación crítica: ${value}%`;
+    isAlert = true; 
+    message = value < 85 
+      ? `🚨 Emergencia Pulmonar: Oxígeno crítico a ${value}%` 
+      : `⚠️ Riesgo Crítico (Altura Arequipa): Oxígeno bajo a ${value}%`;
   }
   if (type === 'PRESSURE') {
     if (value?.sys > ALERT_THRESHOLDS.SYS_HIGH || value?.dia > ALERT_THRESHOLDS.DIA_HIGH) {
-      isAlert = true; message = `⚠️ Presión alta: ${value.sys}/${value.dia} mmHg`;
+      isAlert = true; 
+      message = `🚨 Hipertensión: Presión arterial elevada a ${value.sys}/${value.dia} mmHg`;
+    } else if (value?.sys < ALERT_THRESHOLDS.SYS_LOW || value?.dia < ALERT_THRESHOLDS.DIA_LOW) {
+      isAlert = true; 
+      message = `🚨 Hipotensión: Presión arterial baja a ${value.sys}/${value.dia} mmHg`;
     }
   }
 
   if (!isAlert) return;
 
   try {
+    let alertLocation = location;
+    if (!alertLocation || !alertLocation.lat || !alertLocation.lng) {
+      console.log(`[ALERT] 🔍 Ubicación en vivo nula. Intentando fallback a la tabla locations para usuario: ${userId}...`);
+      const lastLoc = await getLastPatientLocation(userId);
+      if (lastLoc) {
+        alertLocation = {
+          lat: lastLoc.lat,
+          lng: lastLoc.lng,
+          address: lastLoc.address
+        };
+        console.log(`[ALERT] 📍 Fallback exitoso a locations: ${lastLoc.lat}, ${lastLoc.lng}`);
+      }
+    }
+
     await supabase.from('alerts').insert({
       patient_id: userId,
       type,
       value:      JSON.stringify(value),
       message,
-      lat:        location?.lat    || null,
-      lng:        location?.lng    || null,
-      address:    location?.address || null,
+      lat:        alertLocation?.lat    || null,
+      lng:        alertLocation?.lng    || null,
+      address:    alertLocation?.address || null,
       timestamp:  new Date().toISOString(),
       read:       false,
     });
-    console.log('[ALERT] 🚨 Alerta guardada:', message);
+    console.log('[ALERT] 🚨 Alerta guardada con GPS:', message, alertLocation ? '📍' : 'sin GPS');
   } catch (e) {
     console.error('[ALERT] Error guardando alerta:', e.message);
   }
@@ -376,3 +429,55 @@ export const subscribeToPatientProfiles = (patientIds, onProfileChange) => {
 
   return () => supabase.removeChannel(channel);
 };
+
+// ─── COMANDOS REMOTOS (CUIDADOR -> ADULTO MAYOR) ──────────────────────────────
+
+/**
+ * Inserta un nuevo comando remoto solicitado por el cuidador.
+ */
+export const requestRemoteCommand = async ({ patientId, caregiverId, commandType }) => {
+  try {
+    const { data, error } = await supabase.from('remote_commands').insert({
+      patient_id: patientId,
+      caregiver_id: caregiverId,
+      command_type: commandType,
+      status: 'pending'
+    });
+    return { success: !error, error: error?.message };
+  } catch (e) {
+    return { success: false, error: e.message };
+  }
+};
+
+/**
+ * Actualiza el estado de un comando (ej. de pending a completed o failed).
+ */
+export const updateRemoteCommandStatus = async (commandId, status) => {
+  try {
+    await supabase.from('remote_commands').update({ status }).eq('id', commandId);
+  } catch (e) {
+    console.warn('[DB] Error actualizando comando:', e.message);
+  }
+};
+
+/**
+ * Suscripción del Paciente a nuevos comandos remotos pendientes.
+ */
+export const subscribeToRemoteCommands = (patientId, onCommandReceived) => {
+  const channel = supabase
+    .channel('patient_commands')
+    .on('postgres_changes', {
+      event: 'INSERT',
+      schema: 'public',
+      table: 'remote_commands',
+      filter: `patient_id=eq.${patientId}`
+    }, payload => {
+      if (payload.new.status === 'pending') {
+        onCommandReceived(payload.new);
+      }
+    })
+    .subscribe();
+
+  return () => supabase.removeChannel(channel);
+};
+

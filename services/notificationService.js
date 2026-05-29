@@ -56,12 +56,13 @@ export const registerPushToken = async (userId) => {
       });
     }
 
-    // Obtener token de Expo
-    const tokenData = await Notifications.getExpoPushTokenAsync({
-      projectId: 'cardioguard-appexpo', // nombre del proyecto en Expo
-    });
-    const pushToken = tokenData.data;
-    console.log('[PUSH] Token registrado:', pushToken);
+    // Obtener token de Expo (Comentado temporalmente para evitar crash por falta de Firebase)
+    // const tokenData = await Notifications.getExpoPushTokenAsync({
+    //   projectId: 'cardioguard-appexpo',
+    // });
+    // const pushToken = tokenData.data;
+    const pushToken = 'mock_token_until_firebase_configured';
+    console.log('[PUSH] Token registrado (MOCK):', pushToken);
 
     // Guardar token en Supabase
     if (userId && pushToken) {

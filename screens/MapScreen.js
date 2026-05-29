@@ -1,9 +1,9 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, Dimensions,
-  SafeAreaView, StatusBar, Animated, ActivityIndicator, Linking,
+  SafeAreaView, StatusBar, Animated, ActivityIndicator, Linking, Platform
 } from 'react-native';
-import MapView, { Marker, Circle, PROVIDER_GOOGLE } from 'react-native-maps';
+// react-native-maps removido para evitar crasheos por API Key en Android
 import Ionicons from '@expo/vector-icons/Ionicons';
 import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
 
@@ -17,17 +17,22 @@ const TYPE_CONFIG = {
 
 const formatDate = (iso) => {
   const d = new Date(iso);
-  return d.toLocaleString('es-MX', {
-    day: '2-digit', month: 'short', year: 'numeric',
-    hour: '2-digit', minute: '2-digit',
-  });
+  const _months = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'];
+  return `${String(d.getDate()).padStart(2, '0')} ${_months[d.getMonth()]} ${d.getFullYear()}, ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
 };
 
-export default function MapScreen({ reading, currentLocation, onBack }) {
-  const mapRef = useRef(null);
-  const [mapReady, setMapReady] = useState(false);
+export default function MapScreen({ reading, currentLocation, onBack, onRefresh }) {
+  const [mapReady, setMapReady] = useState(true);
   const [accuracy, setAccuracy] = useState(reading?.location?.accuracy || currentLocation?.accuracy || null);
+  const [loadingGPS, setLoadingGPS] = useState(false);
   const fadeAnim = useRef(new Animated.Value(0)).current;
+
+  const handleLocalRefresh = async () => {
+    if (!onRefresh) return;
+    setLoadingGPS(true);
+    await onRefresh();
+    setLoadingGPS(false);
+  };
 
   const targetLoc = reading?.location || currentLocation;
   const cfg = reading ? (TYPE_CONFIG[reading.type] || TYPE_CONFIG.BPM) : null;
@@ -44,6 +49,10 @@ export default function MapScreen({ reading, currentLocation, onBack }) {
       Animated.timing(fadeAnim, { toValue: 1, duration: 600, useNativeDriver: true }).start();
     }
   }, [mapReady]);
+
+  useEffect(() => {
+    setAccuracy(reading?.location?.accuracy || currentLocation?.accuracy || null);
+  }, [reading, currentLocation]);
 
   const openInGoogleMaps = () => {
     if (!targetLoc) return;
@@ -77,57 +86,19 @@ export default function MapScreen({ reading, currentLocation, onBack }) {
     <View style={styles.container}>
       <StatusBar barStyle="dark-content" translucent backgroundColor="transparent" />
 
-      {region && (
-        <MapView
-          ref={mapRef}
-          style={styles.map}
-          provider={PROVIDER_GOOGLE}
-          initialRegion={region}
-          showsUserLocation={!reading}
-          showsMyLocationButton={false}
-          onMapReady={() => setMapReady(true)}
-          mapType="normal"
-        >
-          {accuracy && (
-            <Circle
-              center={{ latitude: targetLoc.lat, longitude: targetLoc.lng }}
-              radius={accuracy}
-              fillColor="rgba(37,99,235,0.08)"
-              strokeColor="rgba(37,99,235,0.25)"
-              strokeWidth={1}
-            />
-          )}
-          <Marker
-            coordinate={{ latitude: targetLoc.lat, longitude: targetLoc.lng }}
-            title={reading ? cfg.label : 'Mi ubicación actual'}
-            description={
-              reading
-                ? `${reading.type === 'PRESSURE'
-                    ? `${reading.value.sys}/${reading.value.dia} mmHg`
-                    : `${reading.value} ${reading.type === 'BPM' ? 'bpm' : '%'}`
-                  } • ${formatDate(reading.timestamp)}`
-                : targetLoc.address || 'Posición actual'
-            }
-          >
-            <View style={[
-              styles.markerContainer,
-              { borderColor: reading ? cfg.color : '#2563eb', backgroundColor: reading ? cfg.bgColor : '#eff6ff' }
-            ]}>
-              {reading
-                ? <cfg.Icon name={cfg.iconName} size={22} color={cfg.color} />
-                : <Ionicons name="location" size={22} color="#2563eb" />
-              }
-            </View>
-          </Marker>
-        </MapView>
-      )}
-
-      {!mapReady && (
-        <View style={styles.loadingOverlay}>
-          <ActivityIndicator size="large" color="#2563eb" />
-          <Text style={styles.loadingText}>Cargando mapa...</Text>
-        </View>
-      )}
+      {/* Mapa eliminado para mantener el proyecto 100% gratuito sin API Keys.
+          Se delega la navegación a la aplicación nativa de mapas del celular. */}
+      
+      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 20 }}>
+        <Ionicons name="location" size={80} color="#2563eb" />
+        <Text style={{ marginTop: 16, fontSize: 18, fontWeight: '800', color: '#1e293b', textAlign: 'center' }}>
+          Coordenadas Listas
+        </Text>
+        <Text style={{ marginTop: 8, fontSize: 14, color: '#64748b', textAlign: 'center', lineHeight: 22 }}>
+          La ubicación GPS del paciente se ha obtenido correctamente. 
+          Presiona el botón inferior para abrir la navegación nativa en tu celular.
+        </Text>
+      </View>
 
       {/* Panel superior */}
       <Animated.View style={[styles.topPanel, { opacity: fadeAnim }]}>
@@ -138,8 +109,17 @@ export default function MapScreen({ reading, currentLocation, onBack }) {
               <Text style={styles.backText}>Volver</Text>
             </TouchableOpacity>
             <Text style={styles.topTitle}>
-              {reading ? 'Ubicación de Lectura' : 'Mi Ubicación'}
+              Ubicación Actual
             </Text>
+            {onRefresh && (
+              <TouchableOpacity onPress={handleLocalRefresh} style={styles.refreshHeaderBtn} disabled={loadingGPS}>
+                {loadingGPS ? (
+                  <ActivityIndicator size="small" color="#2563eb" />
+                ) : (
+                  <Ionicons name="refresh" size={20} color="#2563eb" />
+                )}
+              </TouchableOpacity>
+            )}
           </View>
         </SafeAreaView>
       </Animated.View>
@@ -147,28 +127,11 @@ export default function MapScreen({ reading, currentLocation, onBack }) {
       {/* Panel inferior */}
       <Animated.View style={[styles.bottomPanel, { opacity: fadeAnim }]}>
 
-        {reading && (
-          <View style={[styles.readingBadge, { borderColor: cfg.color, backgroundColor: cfg.bgColor }]}>
-            <cfg.Icon name={cfg.iconName} size={28} color={cfg.color} />
-            <View style={{flex:1}}>
-              <Text style={styles.readingBadgeLabel}>{cfg.label}</Text>
-              <Text style={[styles.readingBadgeValue, { color: cfg.color }]}>
-                {reading.type === 'PRESSURE'
-                  ? `${reading.value.sys}/${reading.value.dia} mmHg`
-                  : `${reading.value} ${reading.type === 'BPM' ? 'bpm' : '%'}`}
-              </Text>
-            </View>
-            <View style={styles.readingTime}>
-              <Text style={styles.readingTimeText}>{formatDate(reading.timestamp)}</Text>
-            </View>
-          </View>
-        )}
-
         <View style={styles.addressRow}>
           <Ionicons name="location" size={20} color="#2563eb" style={{ marginTop: 2 }} />
           <View style={{ flex: 1 }}>
             <Text style={styles.addressLabel}>
-              {reading ? 'Donde se registró' : 'Ubicación actual'}
+              Ubicación actual
             </Text>
             <Text style={styles.addressText}>
               {targetLoc.address || `${targetLoc.lat.toFixed(6)}, ${targetLoc.lng.toFixed(6)}`}
@@ -217,6 +180,8 @@ const styles = StyleSheet.create({
   backBtn:        { backgroundColor: '#fff', borderRadius: 20, flexDirection: 'row', alignItems: 'center', gap: 4,
                     paddingHorizontal: 14, paddingVertical: 10, borderWidth: 1.5, borderColor: '#e2e8f0',
                     shadowColor: '#000', shadowOpacity: 0.06, shadowRadius: 6, elevation: 3 },
+  refreshHeaderBtn: { backgroundColor: '#fff', borderRadius: 20, width: 40, height: 40, justifyContent: 'center', alignItems: 'center', borderWidth: 1.5, borderColor: '#e2e8f0', marginLeft: 'auto',
+                      shadowColor: '#000', shadowOpacity: 0.06, shadowRadius: 6, elevation: 3 },
   backText:       { color: '#475569', fontSize: 14, fontWeight: '700' },
   topTitle:       { color: '#1e293b', fontSize: 16, fontWeight: '800' },
 
@@ -242,12 +207,10 @@ const styles = StyleSheet.create({
   coordChip:      { flex: 1, backgroundColor: '#fff', borderRadius: 12, borderWidth: 1,
                     borderColor: '#e2e8f0', paddingVertical: 10, alignItems: 'center' },
   coordLabel:     { color: '#94a3b8', fontSize: 10, fontWeight: 'bold', letterSpacing: 1 },
-  coordValue:     { color: '#1e293b', fontSize: 12, fontWeight: '700', marginTop: 3 },
+  coordValue:     { fontSize: 13, fontWeight: '700', color: '#1e293b' },
 
-  gmapsBtn:       { backgroundColor: '#2563eb', borderRadius: 30, paddingVertical: 16,
-                    alignItems: 'center', flexDirection: 'row', justifyContent: 'center', gap: 8,
-                    shadowColor: '#2563eb', shadowOpacity: 0.3, shadowRadius: 12, elevation: 4 },
-  gmapsBtnText:   { color: '#fff', fontSize: 16, fontWeight: '800' },
+  gmapsBtn:       { flexDirection: 'row', backgroundColor: '#2563eb', padding: 16, borderRadius: 12, justifyContent: 'center', alignItems: 'center', marginTop: 8 },
+  gmapsBtnText:   { color: '#fff', fontSize: 16, fontWeight: '700', marginLeft: 8 },
 
   noLocHeader:    { padding: 20, borderBottomWidth: 1, borderBottomColor: '#e2e8f0' },
   noLocBody:      { flex: 1, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 40 },

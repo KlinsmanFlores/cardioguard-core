@@ -1,4 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { getLocalSession, saveMetricToSupabase } from './supabaseService';
 
 const READINGS_KEY = '@cardioguard_readings';
 const MAX_READINGS = 500;
@@ -74,6 +75,23 @@ const saveReading = async ({ type, value, location }) => {
     await AsyncStorage.setItem(READINGS_KEY, JSON.stringify(updated));
 
     console.log(`[STORAGE] ✅ Guardado [${type}]:`, value, location ? '📍' : '');
+
+    // Sincronizar en espejo con Supabase en background si hay una sesión activa de Adulto Mayor
+    try {
+      const session = await getLocalSession();
+      if (session && session.userId && session.role === 'adulto_mayor') {
+        console.log(`[STORAGE] 🚀 Espejo Supabase: Sincronizando medición [${type}] para ${session.userId}...`);
+        await saveMetricToSupabase({
+          userId: session.userId,
+          type,
+          value,
+          location
+        });
+      }
+    } catch (dbErr) {
+      console.warn('[STORAGE] Error en background sync con Supabase:', dbErr);
+    }
+
     return newReading;
   } catch (e) {
     console.error('[STORAGE] Error guardando lectura:', e);
